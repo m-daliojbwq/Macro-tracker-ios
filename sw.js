@@ -1,7 +1,7 @@
-const CACHE_NAME = 'macro-tracker-v2';
+const CACHE_NAME = 'macro-tracker-v4';
 const ASSETS = [
-  '/index.html',
-  '/manifest.json',
+  './index.html',
+  './manifest.json',
   'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap'
 ];
 

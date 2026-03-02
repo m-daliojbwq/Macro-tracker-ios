@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Macro Tracker</title>
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="./manifest.json">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -406,7 +406,7 @@
 </div>
 
 <!-- Install Guide (iOS) -->
-<div class="install-banner hidden" id="iosBanner" style="flex-direction:column;align-items:flex-start;gap:8px">
+<div class="install-banner" id="iosBanner" style="display:none;flex-direction:column;align-items:flex-start;gap:8px">
   <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
     <div>
       <div style="font-size:14px;font-weight:700;color:var(--text-bright)">Install Macro Tracker</div>
@@ -920,20 +920,21 @@ window.addEventListener('appinstalled', () => {
 
 // iOS install guide
 function isIos() {
-  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const ua = navigator.userAgent;
+  // Must match iOS AND not match Android
+  return /iphone|ipad|ipod/i.test(ua) && !/android/i.test(ua);
 }
 function isInStandaloneMode() {
   return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
 }
 function dismissIosBanner() {
-  document.getElementById('iosBanner').classList.add('hidden');
+  document.getElementById('iosBanner').style.display = 'none';
   localStorage.setItem('ios_banner_dismissed', 'true');
 }
 
 if (isIos() && !isInStandaloneMode() && !localStorage.getItem('ios_banner_dismissed')) {
-  // Show after a short delay so it's not jarring
   setTimeout(() => {
-    document.getElementById('iosBanner').classList.remove('hidden');
+    document.getElementById('iosBanner').style.display = 'flex';
   }, 2000);
 }
 
@@ -1117,7 +1118,7 @@ render();
 
 // Register service worker
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 </script>
 </body>
