@@ -154,6 +154,28 @@
   .recent-chip:active { background: var(--border); transform: scale(0.97); }
   .recent-chip .chip-cal { font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
 
+  .history-day {
+    padding: 14px; border-radius: 12px; background: var(--bg);
+    border: 1px solid var(--border); margin-bottom: 8px;
+  }
+  .history-day .day-header {
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
+  }
+  .history-day .day-date { font-size: 14px; font-weight: 700; color: var(--text-bright); }
+  .history-day .day-badge {
+    font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 20px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .history-day .day-macros {
+    display: flex; gap: 12px; font-size: 11px; color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .history-day .day-macros span { white-space: nowrap; }
+  .history-bar {
+    height: 4px; border-radius: 4px; margin-top: 8px; background: #1a1f2e; overflow: hidden;
+  }
+  .history-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+
   .scrollable { max-height: 220px; overflow-y: auto; }
   .scrollable::-webkit-scrollbar { width: 4px; }
   .scrollable::-webkit-scrollbar-track { background: transparent; }
@@ -185,7 +207,19 @@
 <div class="header" style="position:relative">
   <h1>MACRO TRACKER</h1>
   <p>1,600 cal target · 230 lbs → cut</p>
-  <button onclick="toggleSettings()" style="position:absolute;top:4px;right:0;background:none;color:var(--text-dim);font-size:20px;padding:4px">⚙️</button>
+  <div style="position:absolute;top:4px;right:0;display:flex;gap:4px">
+    <button onclick="toggleHistory()" style="background:none;color:var(--text-dim);font-size:20px;padding:4px">📊</button>
+    <button onclick="toggleSettings()" style="background:none;color:var(--text-dim);font-size:20px;padding:4px">⚙️</button>
+  </div>
+</div>
+
+<!-- History Panel -->
+<div class="card panel hidden" id="historyPanel" style="margin-bottom:16px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <span style="font-size:14px;font-weight:700;color:var(--text-bright)">📊 Daily History</span>
+    <button onclick="toggleHistory()" style="background:none;color:var(--text-dim);font-size:18px;padding:2px 6px">×</button>
+  </div>
+  <div id="historyList"></div>
 </div>
 
 <!-- Settings Panel -->
@@ -425,13 +459,62 @@ let currentPreview = null;
 // ========== PERSISTENCE ==========
 function save() { localStorage.setItem('macro_entries', JSON.stringify(entries)); }
 
+function getHistory() {
+  return JSON.parse(localStorage.getItem('macro_history') || '[]');
+}
+
+function saveToHistory(date, dayEntries) {
+  if (dayEntries.length === 0) return;
+  const t = dayEntries.reduce((a, e) => ({
+    calories: a.calories + e.cal, protein: a.protein + e.p,
+    carbs: a.carbs + e.c, fat: a.fat + e.f
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+  // Get targets that were active that day (use current as fallback)
+  const targets = { ...TARGETS };
+
+  const history = getHistory();
+  // Don't duplicate same date
+  const existing = history.findIndex(h => h.date === date);
+  const entry = {
+    date,
+    totals: t,
+    targets,
+    items: dayEntries.length,
+    met: {
+      calories: t.calories <= targets.calories,
+      protein: t.protein >= targets.protein * 0.9,
+      carbs: t.carbs <= targets.carbs * 1.1,
+      fat: t.fat <= targets.fat * 1.1,
+    }
+  };
+  if (existing >= 0) {
+    history[existing] = entry;
+  } else {
+    history.unshift(entry);
+  }
+  // Keep 60 days
+  if (history.length > 60) history.length = 60;
+  localStorage.setItem('macro_history', JSON.stringify(history));
+}
+
 function checkDayReset() {
   const today = new Date().toDateString();
   const saved = localStorage.getItem('macro_date');
-  if (saved !== today) {
+  if (saved && saved !== today) {
+    // Save yesterday's data to history before resetting
+    saveToHistory(saved, entries);
     entries = [];
     save();
-    localStorage.setItem('macro_date', today);
+  }
+  localStorage.setItem('macro_date', today);
+}
+
+// Also save current day to history on every entry change (so partial days are captured)
+function saveCurrentDaySnapshot() {
+  const today = new Date().toDateString();
+  if (entries.length > 0) {
+    saveToHistory(today, entries);
   }
 }
 
@@ -549,6 +632,7 @@ function addEntry(food) {
   entries.push({ ...food, meal: selectedMeal, id: Date.now().toString() + Math.random() });
   save();
   addToRecents(food);
+  saveCurrentDaySnapshot();
   render();
 }
 
@@ -588,7 +672,7 @@ function addCustomFood() {
 
 function removeEntry(id) {
   entries = entries.filter(e => e.id !== id);
-  save(); render();
+  save(); saveCurrentDaySnapshot(); render();
 }
 
 function resetDay() {
@@ -851,6 +935,107 @@ if (isIos() && !isInStandaloneMode() && !localStorage.getItem('ios_banner_dismis
   setTimeout(() => {
     document.getElementById('iosBanner').classList.remove('hidden');
   }, 2000);
+}
+
+// ========== HISTORY ==========
+function toggleHistory() {
+  const panel = document.getElementById('historyPanel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) {
+    renderHistory();
+  }
+}
+
+function renderHistory() {
+  const history = getHistory();
+  const container = document.getElementById('historyList');
+
+  if (history.length === 0) {
+    container.innerHTML = '<div style="text-align:center;padding:24px 0;color:#30363d;font-size:13px">No history yet. Your daily summaries will appear here after your first full day of tracking.</div>';
+    return;
+  }
+
+  // Streak calculation
+  let streak = 0;
+  for (const day of history) {
+    const allMet = day.met.calories && day.met.protein;
+    if (allMet) streak++;
+    else break;
+  }
+
+  let html = '';
+
+  // Streak banner
+  if (streak > 0) {
+    html += `<div style="text-align:center;padding:12px;margin-bottom:12px;border-radius:10px;background:#34d39912;border:1px solid #34d39933">
+      <div style="font-size:24px;margin-bottom:4px">🔥</div>
+      <div style="font-size:14px;font-weight:700;color:var(--green)">${streak} day streak</div>
+      <div style="font-size:11px;color:var(--text-dim)">Calories & protein goals met</div>
+    </div>`;
+  }
+
+  // Weekly summary
+  const last7 = history.slice(0, 7);
+  if (last7.length >= 2) {
+    const avgCal = Math.round(last7.reduce((s, d) => s + d.totals.calories, 0) / last7.length);
+    const avgP = Math.round(last7.reduce((s, d) => s + d.totals.protein, 0) / last7.length);
+    const daysGoalMet = last7.filter(d => d.met.calories && d.met.protein).length;
+    html += `<div style="display:flex;gap:8px;margin-bottom:14px">
+      <div style="flex:1;padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--border);text-align:center">
+        <div style="font-size:10px;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:1px">Avg Cal</div>
+        <div class="mono" style="font-size:16px;font-weight:700;color:var(--text-bright)">${avgCal}</div>
+      </div>
+      <div style="flex:1;padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--border);text-align:center">
+        <div style="font-size:10px;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:1px">Avg Protein</div>
+        <div class="mono" style="font-size:16px;font-weight:700;color:var(--text-bright)">${avgP}g</div>
+      </div>
+      <div style="flex:1;padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--border);text-align:center">
+        <div style="font-size:10px;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:1px">Goals Met</div>
+        <div class="mono" style="font-size:16px;font-weight:700;color:${daysGoalMet >= 5 ? 'var(--green)' : 'var(--carbs)'}">${daysGoalMet}/${last7.length}</div>
+      </div>
+    </div>`;
+  }
+
+  // Day cards
+  html += history.slice(0, 30).map(day => {
+    const allMet = day.met.calories && day.met.protein;
+    const someMet = day.met.calories || day.met.protein;
+    const badgeColor = allMet ? '#34d399' : someMet ? '#e8a93e' : '#ff6b6b';
+    const badgeBg = allMet ? '#34d39918' : someMet ? '#e8a93e18' : '#ff6b6b18';
+    const badgeText = allMet ? '✓ Goals Met' : someMet ? '~ Partial' : '✗ Missed';
+    const calPct = Math.min((day.totals.calories / day.targets.calories) * 100, 100);
+    const calColor = day.met.calories ? '#34d399' : '#ff6b6b';
+
+    // Format date nicely
+    const d = new Date(day.date);
+    const isToday = day.date === new Date().toDateString();
+    const isYesterday = day.date === new Date(Date.now() - 86400000).toDateString();
+    let dateLabel = isToday ? 'Today' : isYesterday ? 'Yesterday' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+    return `<div class="history-day">
+      <div class="day-header">
+        <span class="day-date">${dateLabel}</span>
+        <span class="day-badge" style="color:${badgeColor};background:${badgeBg};border:1px solid ${badgeColor}33">${badgeText}</span>
+      </div>
+      <div class="day-macros">
+        <span>${day.totals.calories} cal</span>
+        <span style="color:var(--protein)">${day.totals.protein}g P</span>
+        <span style="color:var(--carbs)">${day.totals.carbs}g C</span>
+        <span style="color:var(--fat)">${day.totals.fat}g F</span>
+        <span style="color:var(--text-dim)">${day.items} items</span>
+      </div>
+      <div class="history-bar">
+        <div class="history-bar-fill" style="width:${calPct}%;background:${calColor}"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Clear history button
+  html += `<div style="text-align:center;margin-top:12px">
+    <button onclick="if(confirm('Clear all history?')){localStorage.removeItem('macro_history');renderHistory()}" style="background:none;color:#30363d;font-size:11px;font-weight:600">Clear history</button>
+  </div>`;
+
+  container.innerHTML = html;
 }
 
 // ========== SETTINGS ==========
