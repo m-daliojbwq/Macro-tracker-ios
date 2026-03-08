@@ -738,17 +738,41 @@ function clearRecents() {
 function handleFileSelect(e) {
   const file = e.target.files[0];
   if (!file) return;
-  if (file.size > 5 * 1024 * 1024) { alert('Image too large. Use under 5MB.'); return; }
+  if (file.size > 10 * 1024 * 1024) { alert('Image too large. Use under 10MB.'); return; }
 
-  // Use canvas to normalize image orientation (fixes sideways phone photos)
   const img = new Image();
   img.onload = () => {
     const canvas = document.createElement('canvas');
-    canvas.width = img.width;
-    canvas.height = img.height;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    currentPreview = canvas.toDataURL('image/jpeg', 0.92);
+
+    // If image is landscape (wider than tall), rotate 90° clockwise
+    // since nutrition labels are almost always portrait-oriented
+    const isLandscape = img.width > img.height;
+    if (isLandscape) {
+      canvas.width = img.height;
+      canvas.height = img.width;
+      ctx.translate(canvas.width, 0);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(img, 0, 0);
+    } else {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+    }
+
+    // Scale down if very large (keeps detail but reduces payload)
+    const maxDim = 2048;
+    if (canvas.width > maxDim || canvas.height > maxDim) {
+      const scale = maxDim / Math.max(canvas.width, canvas.height);
+      const scaled = document.createElement('canvas');
+      scaled.width = Math.round(canvas.width * scale);
+      scaled.height = Math.round(canvas.height * scale);
+      scaled.getContext('2d').drawImage(canvas, 0, 0, scaled.width, scaled.height);
+      currentPreview = scaled.toDataURL('image/jpeg', 0.95);
+    } else {
+      currentPreview = canvas.toDataURL('image/jpeg', 0.95);
+    }
+
     currentImageData = currentPreview.split(',')[1];
     document.getElementById('previewImg').src = currentPreview;
     document.getElementById('scanUpload').classList.add('hidden');
@@ -800,21 +824,28 @@ async function analyzePhoto() {
             role: 'user',
             content: [
               { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: currentImageData } },
-              { type: 'text', text: `Read the nutritional information from this image. The image may be rotated or sideways — orient yourself first.
+              { type: 'text', text: `Extract the nutritional information from this image.
 
-STEP 1: Transcribe exactly what you see. Write out each field on its own line:
+STEP 1 — TRANSCRIBE: Write out each field you can read, one per line:
 - PRODUCT NAME: (the name of the food/product)
-- SERVING SIZE: (e.g. "341g" or "1 cup")  
-- CALORIES: (the calorie number — NOT a percentage)
-- PROTEIN: (grams — read ALL digits carefully, e.g. "37g" not "3g" or "7g")
-- TOTAL FAT: (grams — the main fat number, not saturated/trans sub-items)
-- TOTAL CARBOHYDRATES: (grams — the main carb number, not fiber/sugar sub-items)
+- SERVING SIZE: (e.g. "341g" or "1 cup (228g)")
+- CALORIES: (just the number, e.g. 840)
+- PROTEIN: (grams, e.g. 37g)
+- TOTAL FAT: (grams — the MAIN fat line, NOT the indented saturated/trans fat sub-lines)
+- TOTAL CARBOHYDRATES: (grams — the MAIN carbs line, NOT the indented fiber/sugar sub-lines)
 
-Read every digit carefully. "341g" has THREE digits. "840" has THREE digits. Do not drop digits.
+IMPORTANT — read EVERY digit in each number. Common mistakes:
+- "53g" must not become "5g" — count every digit
+- "61g" must not become "6g" — count every digit
+- "840" must not become "340" or "84" — count every digit
+- If a number looks like it could be 1, 2, or 3 digits, zoom in mentally and read carefully
 
-STEP 2: Verify your reading. Calculate protein×4 + carbs×4 + fat×9. This should be roughly close to the calorie number (within 20%). If it's way off, you misread something — go back and re-read.
+STEP 2 — VERIFY: Check your work with this formula:
+  (protein × 4) + (carbs × 4) + (fat × 9) ≈ calories (within about 20%)
+Example: If you read protein=37, carbs=61, fat=53: (37×4)+(61×4)+(53×9) = 148+244+477 = 869, which is close to 840 ✓
+If YOUR numbers don't pass this check, you misread a value — go back and re-read the label more carefully, then redo the check.
 
-STEP 3: Output ONLY this JSON on the final line — no markdown, no backticks:
+STEP 3 — OUTPUT: On the final line, output ONLY this JSON (no markdown, no backticks, no extra text on that line):
 {"foods": [{"name": "Product name (serving size)", "cal": NUMBER, "p": PROTEIN_GRAMS, "c": CARB_GRAMS, "f": FAT_GRAMS}]}
 
 If this is a photo of food (not a label), identify each item, estimate portions conservatively, and output the same JSON format.` }
