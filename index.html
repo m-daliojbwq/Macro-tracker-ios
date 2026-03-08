@@ -740,9 +740,15 @@ function handleFileSelect(e) {
   if (!file) return;
   if (file.size > 5 * 1024 * 1024) { alert('Image too large. Use under 5MB.'); return; }
 
-  const reader = new FileReader();
-  reader.onload = (ev) => {
-    currentPreview = ev.target.result;
+  // Use canvas to normalize image orientation (fixes sideways phone photos)
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    currentPreview = canvas.toDataURL('image/jpeg', 0.92);
     currentImageData = currentPreview.split(',')[1];
     document.getElementById('previewImg').src = currentPreview;
     document.getElementById('scanUpload').classList.add('hidden');
@@ -750,16 +756,11 @@ function handleFileSelect(e) {
     document.getElementById('scanResults').classList.add('hidden');
     document.getElementById('scanError').classList.add('hidden');
     document.getElementById('previewImg').style.filter = 'none';
+    URL.revokeObjectURL(img.src);
   };
-  reader.readAsDataURL(file);
+  img.src = URL.createObjectURL(file);
 }
 
-function getMediaType() {
-  if (!currentPreview) return 'image/jpeg';
-  if (currentPreview.startsWith('data:image/png')) return 'image/png';
-  if (currentPreview.startsWith('data:image/webp')) return 'image/webp';
-  return 'image/jpeg';
-}
 
 async function analyzePhoto() {
   if (!currentImageData) return;
@@ -794,45 +795,29 @@ async function analyzePhoto() {
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 2048,
-        system: `You are a precision nutrition label reader and food analyst. Your job is to extract EXACT nutritional data.
-
-STEP 1: Determine if this is a NUTRITION LABEL or a FOOD PHOTO.
-
-IF NUTRITION LABEL (Nutrition Facts panel, supplement facts, or any printed/digital nutrition info):
-- CAREFULLY read every line of the label. Do NOT guess or estimate — read the printed numbers.
-- Look for and read these fields EXACTLY as printed:
-  • Serving size (include in the food name)
-  • Calories (the large bold number near the top)
-  • Total Fat (in grams)
-  • Total Carbohydrate / Total Carbs (in grams) — use TOTAL carbs, not just sugars or fiber
-  • Protein (in grams)
-- Use "per serving" values (not "per container") unless only per-container is shown.
-- COMMON MISTAKES TO AVOID:
-  • Do NOT confuse "% Daily Value" percentages with gram amounts. The % column is on the RIGHT side — ignore it. Use the GRAM values on the LEFT.
-  • Do NOT confuse Total Fat with Saturated Fat or Trans Fat (which are indented sub-items).
-  • Do NOT confuse Total Carbohydrate with Dietary Fiber or Total Sugars (which are indented sub-items).
-  • Calories is usually a large bold number — do not confuse it with "Calories from Fat" if present.
-  • If the label says "Calories 230", the value is 230, NOT the % daily value next to it.
-- Double-check: do the macros roughly add up? (protein×4 + carbs×4 + fat×9 ≈ calories, within ~10%)
-- For the name: use the product name if visible in the image, plus serving size. If product name is not visible, use "Nutrition label item (serving size)".
-
-IF FOOD PHOTO (actual food, meal, plate, snack):
-- Identify each distinct food item visible.
-- Estimate portion sizes conservatively (for someone tracking macros on a cut).
-- Use USDA-standard nutritional values for each item.
-- When in doubt, round calories UP and protein DOWN (conservative for a deficit).
-
-STEP 2: After your analysis, respond with ONLY this JSON (no markdown, no backticks, no explanation):
-{"foods": [{"name": "Item name with portion/serving size", "cal": 250, "p": 30, "c": 10, "f": 8}]}
-
-Values must be whole numbers. "cal" = calories, "p" = protein grams, "c" = total carb grams, "f" = total fat grams.
-If you truly cannot identify food or read a label: {"foods": [], "error": "Could not identify food or nutrition info"}`,
         messages: [
           {
             role: 'user',
             content: [
-              { type: 'image', source: { type: 'base64', media_type: getMediaType(), data: currentImageData } },
-              { type: 'text', text: 'Read this image carefully. If it\'s a nutrition label, read EVERY number exactly as printed — do NOT confuse % Daily Value with gram amounts. If it\'s a food photo, identify and estimate each item. Think through what you see step by step, then output the JSON.' }
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: currentImageData } },
+              { type: 'text', text: `Read the nutritional information from this image. The image may be rotated or sideways — orient yourself first.
+
+STEP 1: Transcribe exactly what you see. Write out each field on its own line:
+- PRODUCT NAME: (the name of the food/product)
+- SERVING SIZE: (e.g. "341g" or "1 cup")  
+- CALORIES: (the calorie number — NOT a percentage)
+- PROTEIN: (grams — read ALL digits carefully, e.g. "37g" not "3g" or "7g")
+- TOTAL FAT: (grams — the main fat number, not saturated/trans sub-items)
+- TOTAL CARBOHYDRATES: (grams — the main carb number, not fiber/sugar sub-items)
+
+Read every digit carefully. "341g" has THREE digits. "840" has THREE digits. Do not drop digits.
+
+STEP 2: Verify your reading. Calculate protein×4 + carbs×4 + fat×9. This should be roughly close to the calorie number (within 20%). If it's way off, you misread something — go back and re-read.
+
+STEP 3: Output ONLY this JSON on the final line — no markdown, no backticks:
+{"foods": [{"name": "Product name (serving size)", "cal": NUMBER, "p": PROTEIN_GRAMS, "c": CARB_GRAMS, "f": FAT_GRAMS}]}
+
+If this is a photo of food (not a label), identify each item, estimate portions conservatively, and output the same JSON format.` }
             ]
           }
         ]
@@ -841,9 +826,6 @@ If you truly cannot identify food or read a label: {"foods": [], "error": "Could
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);
-      if (response.status === 0 || response.type === 'opaque') {
-        throw new Error('CORS error: Browser blocked the request. Make sure your API key is valid and try again.');
-      }
       if (response.status === 401) {
         throw new Error('Invalid API key. Check your key in ⚙️ Settings.');
       }
@@ -857,17 +839,26 @@ If you truly cannot identify food or read a label: {"foods": [], "error": "Could
     if (data.error) throw new Error(data.error.message || 'API error');
 
     const text = data.content.map(b => b.type === 'text' ? b.text : '').join('');
-    // Extract JSON from response — handle cases where model includes reasoning text before JSON
-    let jsonStr = text;
-    const jsonMatch = text.match(/\{[\s\S]*"foods"\s*:\s*\[[\s\S]*\]\s*\}/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[0];
-    } else {
-      jsonStr = text.replace(/```json|```/g, '').trim();
-    }
-    const parsed = JSON.parse(jsonStr);
 
-    if (parsed.error) throw new Error(parsed.error);
+    // Extract the JSON object — it should be near the end after the reasoning
+    let parsed = null;
+    // Try to find the last JSON object containing "foods" in the response
+    const allMatches = [...text.matchAll(/\{[^{}]*"foods"\s*:\s*\[[\s\S]*?\]\s*\}/g)];
+    if (allMatches.length > 0) {
+      parsed = JSON.parse(allMatches[allMatches.length - 1][0]);
+    } else {
+      // Fallback: try cleaning the whole text
+      const clean = text.replace(/```json|```/g, '').trim();
+      const lastBrace = clean.lastIndexOf('}');
+      const firstBrace = clean.lastIndexOf('{"foods"');
+      if (firstBrace >= 0 && lastBrace >= firstBrace) {
+        parsed = JSON.parse(clean.substring(firstBrace, lastBrace + 1));
+      } else {
+        parsed = JSON.parse(clean);
+      }
+    }
+
+    if (!parsed || parsed.error) throw new Error(parsed?.error || 'Could not parse response');
     if (!parsed.foods || parsed.foods.length === 0) throw new Error('No food items detected.');
 
     // Sanity check: flag if macros don't roughly add up for any item
