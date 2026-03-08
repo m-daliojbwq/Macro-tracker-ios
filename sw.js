@@ -1,4 +1,4 @@
-const CACHE_NAME = 'macro-tracker-v4';
+const CACHE_NAME = 'macro-tracker-v5';
 const ASSETS = [
   './index.html',
   './manifest.json',
@@ -26,7 +26,20 @@ self.addEventListener('fetch', event => {
   if (event.request.url.includes('api.anthropic.com')) {
     return;
   }
-  event.respondWith(
-    caches.match(event.request).then(cached => cached || fetch(event.request))
-  );
+  // Network-first for HTML (so updates propagate), cache-first for everything else
+  if (event.request.mode === 'navigate' || event.request.url.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+  } else {
+    event.respondWith(
+      caches.match(event.request).then(cached => cached || fetch(event.request))
+    );
+  }
 });
