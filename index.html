@@ -321,11 +321,13 @@
   <div id="scanPreviewArea" class="hidden">
     <div style="position:relative;margin-bottom:14px">
       <img id="previewImg" class="scan-preview" alt="Food preview">
-      <div id="scanLoading" class="hidden" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+      <button onclick="rotatePreview()" style="position:absolute;top:8px;right:8px;width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,0.7);color:#fff;font-size:18px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.2);backdrop-filter:blur(4px)">↻</button>
+      <div id="scanLoading" class="hidden" style="position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center">
         <div class="spinner"></div>
         <span style="color:var(--purple);font-size:13px;font-weight:600;margin-top:10px">Analyzing your meal...</span>
       </div>
     </div>
+    <div style="font-size:11px;color:var(--text-dim);text-align:center;margin:-8px 0 10px">Tap ↻ to rotate if the image is sideways</div>
     <div id="scanError" class="error-msg hidden"></div>
     <div id="scanActions" style="display:flex;gap:8px">
       <button onclick="resetScanner()" style="flex:1;padding:11px 0;border-radius:10px;border:1px solid #30363d;background:transparent;color:#8b949e;font-size:13px;font-weight:600">Retake</button>
@@ -735,44 +737,34 @@ function clearRecents() {
 }
 
 // ========== SCANNER ==========
+let currentRotation = 0;
+
 function handleFileSelect(e) {
   const file = e.target.files[0];
   if (!file) return;
   if (file.size > 10 * 1024 * 1024) { alert('Image too large. Use under 10MB.'); return; }
 
+  currentRotation = 0;
   const img = new Image();
   img.onload = () => {
+    // Draw through canvas to normalize EXIF orientation
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    canvas.getContext('2d').drawImage(img, 0, 0);
 
-    // If image is landscape (wider than tall), rotate 90° clockwise
-    // since nutrition labels are almost always portrait-oriented
-    const isLandscape = img.width > img.height;
-    if (isLandscape) {
-      canvas.width = img.height;
-      canvas.height = img.width;
-      ctx.translate(canvas.width, 0);
-      ctx.rotate(Math.PI / 2);
-      ctx.drawImage(img, 0, 0);
-    } else {
-      canvas.width = img.width;
-      canvas.height = img.height;
-      ctx.drawImage(img, 0, 0);
-    }
-
-    // Scale down if very large (keeps detail but reduces payload)
+    // Scale down if very large
     const maxDim = 2048;
+    let finalCanvas = canvas;
     if (canvas.width > maxDim || canvas.height > maxDim) {
       const scale = maxDim / Math.max(canvas.width, canvas.height);
-      const scaled = document.createElement('canvas');
-      scaled.width = Math.round(canvas.width * scale);
-      scaled.height = Math.round(canvas.height * scale);
-      scaled.getContext('2d').drawImage(canvas, 0, 0, scaled.width, scaled.height);
-      currentPreview = scaled.toDataURL('image/jpeg', 0.95);
-    } else {
-      currentPreview = canvas.toDataURL('image/jpeg', 0.95);
+      finalCanvas = document.createElement('canvas');
+      finalCanvas.width = Math.round(canvas.width * scale);
+      finalCanvas.height = Math.round(canvas.height * scale);
+      finalCanvas.getContext('2d').drawImage(canvas, 0, 0, finalCanvas.width, finalCanvas.height);
     }
 
+    currentPreview = finalCanvas.toDataURL('image/jpeg', 0.95);
     currentImageData = currentPreview.split(',')[1];
     document.getElementById('previewImg').src = currentPreview;
     document.getElementById('scanUpload').classList.add('hidden');
@@ -785,6 +777,26 @@ function handleFileSelect(e) {
   img.src = URL.createObjectURL(file);
 }
 
+function rotatePreview() {
+  if (!currentPreview) return;
+  currentRotation = (currentRotation + 90) % 360;
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    // Swap width/height for 90° rotation
+    canvas.width = img.height;
+    canvas.height = img.width;
+    const ctx = canvas.getContext('2d');
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(img, -img.width / 2, -img.height / 2);
+    currentPreview = canvas.toDataURL('image/jpeg', 0.95);
+    currentImageData = currentPreview.split(',')[1];
+    document.getElementById('previewImg').src = currentPreview;
+  };
+  img.src = currentPreview;
+}
+
 
 async function analyzePhoto() {
   if (!currentImageData) return;
@@ -794,6 +806,7 @@ async function analyzePhoto() {
   const preview = document.getElementById('previewImg');
 
   loading.classList.remove('hidden');
+  loading.style.display = 'flex';
   errEl.classList.add('hidden');
   preview.style.filter = 'brightness(0.5)';
   document.getElementById('analyzeBtn').disabled = true;
@@ -913,6 +926,7 @@ If this is a photo of food (not a label), identify each item, estimate portions 
   }
 
   loading.classList.add('hidden');
+  loading.style.display = '';
   document.getElementById('analyzeBtn').disabled = false;
 }
 
@@ -958,6 +972,7 @@ function addAllScanned() {
 function resetScanner() {
   currentImageData = null;
   currentPreview = null;
+  currentRotation = 0;
   scannedResults = [];
   document.getElementById('fileInput').value = '';
   document.getElementById('scanUpload').classList.remove('hidden');

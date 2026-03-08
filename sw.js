@@ -1,4 +1,4 @@
-const CACHE_NAME = 'macro-tracker-v6';
+const CACHE_NAME = 'macro-tracker-v8';
 const ASSETS = [
   './index.html',
   './manifest.json',
